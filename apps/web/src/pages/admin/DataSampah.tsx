@@ -1,11 +1,21 @@
-import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Search } from "lucide-react";
-import type { Kategori, StatusData } from "../../lib/sampahData";
-import { getDataSampah, updateStatusSampah } from "../../lib/dataSampahStore";
-
-const KATEGORI_LIST: Kategori[] = ["Organik", "Anorganik", "B3"];
-const STATUS_LIST: StatusData[] = ["Terverifikasi", "Menunggu", "Ditolak"];
+import { useMemo, useState, type FormEvent } from "react";
+import { useOutletContext } from "react-router-dom";
+import {
+  LOKASI_LIST,
+  PETUGAS_LIST,
+  addDataSampah,
+  deleteDataSampah,
+  getDataSampah,
+  updateStatusSampah,
+} from "../../lib/dataSampahStore";
+import {
+  KATEGORI_LIST,
+  STATUS_LIST,
+  toISODate,
+  type Kategori,
+  type StatusData,
+} from "../../lib/sampahData";
+import { useFetch } from "../../lib/useFetch";
 
 const KATEGORI_STYLE: Record<Kategori, string> = {
   Organik: "bg-emerald-100 text-emerald-800",
@@ -20,169 +30,400 @@ const STATUS_STYLE: Record<StatusData, string> = {
 };
 
 const badge = "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium";
-const control =
-  "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800 outline-none focus:border-emerald-700";
 
-function formatTanggal(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("id-ID", {
+const field =
+  "h-10 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20";
+
+const tgl = (iso: string) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString("id-ID", {
     day: "numeric",
     month: "short",
     year: "numeric",
   });
-}
 
-function formatBerat(kg: number): string {
-  return `${kg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`;
-}
+export default function DataSampah() {
+  const ctx = useOutletContext<{ refresh?: () => void } | null>();
+  const { data: rows, loading, error, reload } = useFetch(getDataSampah);
 
-interface DataSampahProps {
-  /** Filter awal dari route, misalnya /admin/kategori/organik. */
-  kategori?: Kategori;
-  status?: StatusData;
-}
+  // Filter
+  const [cari, setCari] = useState("");
+  const [fStatus, setFStatus] = useState<StatusData | "">("");
+  const [fKategori, setFKategori] = useState<Kategori | "">("");
 
-export default function DataSampah({ kategori: kategoriAwal, status: statusAwal }: DataSampahProps) {
-  const navigate = useNavigate();
-  const [params] = useSearchParams();
+  // Form tambah data
+  const [showForm, setShowForm] = useState(false);
+  const [tanggal, setTanggal] = useState(toISODate(new Date()));
+  const [lokasi, setLokasi] = useState(LOKASI_LIST[0]);
+  const [petugas, setPetugas] = useState(PETUGAS_LIST[0]);
+  const [kategori, setKategori] = useState<Kategori>("Organik");
+  const [berat, setBerat] = useState("");
+  const [catatan, setCatatan] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
 
-  const [data, setData] = useState(() => getDataSampah());
-  const [cari, setCari] = useState(params.get("q") ?? "");
-  const [kategori, setKategori] = useState<Kategori | "Semua">(kategoriAwal ?? "Semua");
-  const [status, setStatus] = useState<StatusData | "Semua">(statusAwal ?? "Semua");
+  // Aksi pada baris
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
 
-  const q = cari.trim().toLowerCase();
+  const data = rows ?? [];
 
-  const rows = data.filter(
-    (r) =>
-      (kategori === "Semua" || r.kategori === kategori) &&
-      (status === "Semua" || r.status === status) &&
-      (q === "" ||
-        r.id.toLowerCase().includes(q) ||
-        r.lokasi.toLowerCase().includes(q) ||
-        r.petugas.toLowerCase().includes(q)),
+  // Semua hook dipanggil sebelum return bersyarat di bawah
+  const tampil = useMemo(() => {
+    const q = cari.trim().toLowerCase();
+    return data.filter(
+      (d) =>
+        (!fStatus || d.status === fStatus) &&
+        (!fKategori || d.kategori === fKategori) &&
+        (!q || [d.id, d.lokasi, d.petugas ?? ""].some((v) => v.toLowerCase().includes(q))),
+    );
+  }, [data, cari, fStatus, fKategori]);
+
+  const totalBerat = useMemo(
+    () => tampil.reduce((sum, d) => sum + d.beratKg, 0),
+    [tampil],
   );
 
-  const ubahStatus = (id: string, baru: StatusData) => {
-    updateStatusSampah(id, baru);
-    setData(getDataSampah());
+  if (loading && !rows) {
+    return <p className="text-sm text-stone-600">Memuat data...</p>;
+  }
+  if (error && !rows) {
+    return (
+      <div role="alert" className="rounded-lg bg-red-50 px-3 py-3 text-sm text-red-700">
+        <p>{error}</p>
+        <button type="button" onClick={() => void reload()} className="mt-2 font-medium underline">
+          Coba lagi
+        </button>
+      </div>
+    );
+  }
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setFormError("");
+
+    const beratKg = Number(berat.replace(",", "."));
+    if (!Number.isFinite(beratKg) || beratKg <= 0) {
+      setFormError("Berat harus berupa angka lebih dari 0.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await addDataSampah({
+        tanggal,
+        lokasi,
+        petugas,
+        kategori,
+        beratKg,
+        catatan: catatan.trim() || undefined,
+      });
+      setBerat("");
+      setCatatan("");
+      setShowForm(false);
+      await reload();
+      ctx?.refresh?.();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Gagal menyimpan data.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const ubahStatus = async (id: string, baru: "Terverifikasi" | "Ditolak") => {
+    setActionError("");
+    setBusyId(id);
+    try {
+      await updateStatusSampah(id, baru);
+      await reload();
+      ctx?.refresh?.();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Gagal memproses data.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const hapus = async (id: string) => {
+    if (!window.confirm(`Hapus data ${id}? Tindakan ini tidak bisa dibatalkan.`)) return;
+    setActionError("");
+    setBusyId(id);
+    try {
+      await deleteDataSampah(id);
+      await reload();
+      ctx?.refresh?.();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Gagal menghapus data.");
+    } finally {
+      setBusyId(null);
+    }
   };
 
   return (
     <div className="space-y-4">
-      {/* Filter */}
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-stone-200 bg-white p-4">
-        <div className="relative min-w-[220px] flex-1">
-          <Search
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
-            aria-hidden="true"
-          />
-          <input
-            type="search"
-            value={cari}
-            onChange={(e) => setCari(e.target.value)}
-            placeholder="Cari ID, lokasi, atau petugas"
-            className={`${control} w-full pl-9`}
-          />
+      {/* Ringkasan */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-stone-200 bg-white p-4">
+          <p className="text-sm text-stone-500">Total data</p>
+          <p className="mt-1 text-2xl font-semibold text-stone-900">{data.length}</p>
         </div>
+        <div className="rounded-xl border border-stone-200 bg-white p-4">
+          <p className="text-sm text-stone-500">Data ditampilkan</p>
+          <p className="mt-1 text-2xl font-semibold text-stone-900">{tampil.length}</p>
+        </div>
+        <div className="col-span-2 rounded-xl border border-stone-200 bg-white p-4 lg:col-span-1">
+          <p className="text-sm text-stone-500">Berat ditampilkan</p>
+          <p className="mt-1 text-2xl font-semibold text-stone-900">
+            {totalBerat.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg
+          </p>
+        </div>
+      </div>
 
+      {/* Filter dan tombol tambah */}
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="search"
+          value={cari}
+          onChange={(e) => setCari(e.target.value)}
+          placeholder="Cari ID, lokasi, atau petugas"
+          aria-label="Cari data sampah"
+          className={`${field} max-w-xs`}
+        />
         <select
-          aria-label="Filter kategori"
-          value={kategori}
-          onChange={(e) => setKategori(e.target.value as Kategori | "Semua")}
-          className={control}
-        >
-          <option value="Semua">Semua kategori</option>
-          {KATEGORI_LIST.map((k) => (
-            <option key={k} value={k}>{k}</option>
-          ))}
-        </select>
-
-        <select
+          value={fStatus}
+          onChange={(e) => setFStatus(e.target.value as StatusData | "")}
           aria-label="Filter status"
-          value={status}
-          onChange={(e) => setStatus(e.target.value as StatusData | "Semua")}
-          className={control}
+          className={`${field} w-auto`}
         >
-          <option value="Semua">Semua status</option>
+          <option value="">Semua status</option>
           {STATUS_LIST.map((s) => (
-            <option key={s} value={s}>{s}</option>
+            <option key={s}>{s}</option>
           ))}
         </select>
-
+        <select
+          value={fKategori}
+          onChange={(e) => setFKategori(e.target.value as Kategori | "")}
+          aria-label="Filter kategori"
+          className={`${field} w-auto`}
+        >
+          <option value="">Semua kategori</option>
+          {KATEGORI_LIST.map((k) => (
+            <option key={k}>{k}</option>
+          ))}
+        </select>
         <button
           type="button"
-          onClick={() => navigate("/admin/sampah/tambah")}
-          className="ml-auto inline-flex items-center gap-2 rounded-lg bg-emerald-900 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+          onClick={() => setShowForm((v) => !v)}
+          className="ml-auto rounded-lg bg-emerald-900 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
         >
-          <Plus className="h-4 w-4" aria-hidden="true" />
-          Input data
+          {showForm ? "Tutup form" : "Tambah data"}
         </button>
       </div>
 
-      {/* Tabel. overflow-x-auto agar tabel lebar tidak mendorong layout */}
-      <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
-        <table className="w-full min-w-[820px] text-left text-sm">
-          <thead className="border-b border-stone-200 text-stone-600">
-            <tr>
-              <th className="px-4 py-3 font-medium">ID</th>
-              <th className="px-4 py-3 font-medium">Tanggal</th>
-              <th className="px-4 py-3 font-medium">Lokasi</th>
-              <th className="px-4 py-3 font-medium">Petugas</th>
-              <th className="px-4 py-3 font-medium">Kategori</th>
-              <th className="px-4 py-3 text-right font-medium">Berat</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              <th className="px-4 py-3 font-medium">
-                <span className="sr-only">Aksi</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-stone-500">
-                  Tidak ada data yang cocok.
-                </td>
-              </tr>
-            ) : (
-              rows.map((r) => (
-                <tr key={r.id} className="border-b border-stone-100 last:border-0">
-                  <td className="px-4 py-3 font-semibold text-stone-900">{r.id}</td>
-                  <td className="px-4 py-3">{formatTanggal(r.tanggal)}</td>
-                  <td className="px-4 py-3">{r.lokasi}</td>
-                  <td className="px-4 py-3">{r.petugas}</td>
-                  <td className="px-4 py-3">
-                    <span className={`${badge} ${KATEGORI_STYLE[r.kategori]}`}>{r.kategori}</span>
-                  </td>
-                  <td className="px-4 py-3 text-right">{formatBerat(r.beratKg)}</td>
-                  <td className="px-4 py-3">
-                    <span className={`${badge} ${STATUS_STYLE[r.status]}`}>{r.status}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {r.status === "Menunggu" && (
+      {/* Form tambah data */}
+      {showForm && (
+        <form
+          onSubmit={handleSubmit}
+          className="grid gap-4 rounded-xl border border-stone-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-3"
+        >
+          <div>
+            <label htmlFor="tanggal" className="mb-1 block text-sm font-medium text-stone-700">
+              Tanggal
+            </label>
+            <input
+              id="tanggal"
+              type="date"
+              value={tanggal}
+              max={toISODate(new Date())}
+              onChange={(e) => setTanggal(e.target.value)}
+              required
+              className={field}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="lokasi" className="mb-1 block text-sm font-medium text-stone-700">
+              Lokasi
+            </label>
+            <select id="lokasi" value={lokasi} onChange={(e) => setLokasi(e.target.value)} className={field}>
+              {LOKASI_LIST.map((l) => (
+                <option key={l}>{l}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="petugas" className="mb-1 block text-sm font-medium text-stone-700">
+              Petugas
+            </label>
+            <select id="petugas" value={petugas} onChange={(e) => setPetugas(e.target.value)} className={field}>
+              {PETUGAS_LIST.map((p) => (
+                <option key={p}>{p}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="kategori" className="mb-1 block text-sm font-medium text-stone-700">
+              Kategori
+            </label>
+            <select
+              id="kategori"
+              value={kategori}
+              onChange={(e) => setKategori(e.target.value as Kategori)}
+              className={field}
+            >
+              {KATEGORI_LIST.map((k) => (
+                <option key={k}>{k}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="berat" className="mb-1 block text-sm font-medium text-stone-700">
+              Berat (kg)
+            </label>
+            <input
+              id="berat"
+              type="text"
+              inputMode="decimal"
+              value={berat}
+              onChange={(e) => setBerat(e.target.value)}
+              placeholder="Contoh: 12,5"
+              required
+              className={field}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="catatan" className="mb-1 block text-sm font-medium text-stone-700">
+              Catatan (opsional)
+            </label>
+            <input
+              id="catatan"
+              type="text"
+              value={catatan}
+              onChange={(e) => setCatatan(e.target.value)}
+              maxLength={300}
+              className={field}
+            />
+          </div>
+
+          <p className="text-xs text-stone-500 sm:col-span-2 lg:col-span-3">
+            Data baru berstatus Menunggu sampai disetujui.
+          </p>
+
+          {formError && (
+            <p
+              role="alert"
+              className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 sm:col-span-2 lg:col-span-3"
+            >
+              {formError}
+            </p>
+          )}
+
+          <div className="sm:col-span-2 lg:col-span-3">
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-lg bg-emerald-900 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
+            >
+              {saving ? "Menyimpan..." : "Simpan data"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {actionError && (
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          {actionError}
+        </p>
+      )}
+
+      {/* Tabel */}
+      <section className="rounded-xl border border-stone-200 bg-white">
+        {tampil.length === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-stone-500">
+            {data.length === 0
+              ? "Belum ada data sampah."
+              : "Tidak ada data yang cocok dengan filter."}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[860px] text-left text-sm">
+              <thead className="border-b border-stone-200 text-xs text-stone-500">
+                <tr>
+                  <th className="px-4 py-3 font-medium">ID</th>
+                  <th className="px-4 py-3 font-medium">Tanggal</th>
+                  <th className="px-4 py-3 font-medium">Lokasi</th>
+                  <th className="px-4 py-3 font-medium">Petugas</th>
+                  <th className="px-4 py-3 font-medium">Kategori</th>
+                  <th className="px-4 py-3 font-medium">Berat</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 text-right font-medium">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tampil.map((d) => (
+                  <tr key={d.id} className="border-b border-stone-100 last:border-0">
+                    <td className="px-4 py-3 font-semibold text-stone-900">
+                      {d.id}
+                      {d.catatan && (
+                        <p className="mt-0.5 text-xs font-normal text-stone-500">
+                          Catatan: {d.catatan}
+                        </p>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">{tgl(d.tanggal)}</td>
+                    <td className="px-4 py-3">{d.lokasi}</td>
+                    <td className="px-4 py-3 text-stone-600">{d.petugas || "-"}</td>
+                    <td className="px-4 py-3">
+                      <span className={`${badge} ${KATEGORI_STYLE[d.kategori]}`}>{d.kategori}</span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {d.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`${badge} ${STATUS_STYLE[d.status]}`}>{d.status}</span>
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex justify-end gap-2">
+                        {d.status === "Menunggu" && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busyId === d.id}
+                              onClick={() => void ubahStatus(d.id, "Terverifikasi")}
+                              className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
+                            >
+                              Setujui
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busyId === d.id}
+                              onClick={() => void ubahStatus(d.id, "Ditolak")}
+                              className="rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                            >
+                              Tolak
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
-                          onClick={() => ubahStatus(r.id, "Terverifikasi")}
-                          className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-800"
+                          disabled={busyId === d.id}
+                          onClick={() => void hapus(d.id)}
+                          className="rounded-md border border-stone-300 px-2.5 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-60"
                         >
-                          Setujui
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => ubahStatus(r.id, "Ditolak")}
-                          className="rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
-                        >
-                          Tolak
+                          Hapus
                         </button>
                       </div>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
