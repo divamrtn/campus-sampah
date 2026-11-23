@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+enum Role {
+  admin
+  petugas
+  mahasiswa
+}
+enum StatusUser {
+  Aktif
+  Nonaktif
+}
+enum Kategori {
+  Organik
+  Anorganik
+  B3
+}
+enum Status {
+  Menunggu
+  Terverifikasi
+  Ditolak
+}
+enum TipeTransaksiPoin {
+  Setoran
+  Penukaran
+  Penyesuaian
+}
+enum StatusPenukaran {
+  Diproses
+  Selesai
+  Dibatalkan
+}
+enum StatusLaporan {
+  Baru
+  Diproses
+  Selesai
+  Ditolak
+}
+enum StatusJadwal {
+  Terjadwal
+  Berjalan
+  Selesai
+  Dibatalkan
+}
+model User {
+  id           Int        @id @default(autoincrement())
+  username     String     @unique
+  email        String     @unique
+  name         String
+  passwordHash String     @map("password_hash")
+  role         Role
+  status       StatusUser @default(Aktif)
+  phone        String?
+  fotoUrl      String?    @map("foto_url")
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  mahasiswa Mahasiswa?
+  petugas   Petugas?
+  sampahMilik       SampahRow[] @relation("SampahPemilik")
+  sampahDibuat      SampahRow[] @relation("SampahPembuat")
+  sampahDiverifikasi SampahRow[] @relation("SampahVerifikator")
+  transaksiPoin     TransaksiPoin[]  @relation("PoinPemilik")
+  penyesuaianPoin   TransaksiPoin[]  @relation("PoinPenyesuaianOleh")
+  penukaran         PenukaranReward[] @relation("PenukaranPemilik")
+  penukaranDiproses PenukaranReward[] @relation("PenukaranDiproses")
+  laporan           LaporanSampah[]   @relation("LaporanPelapor")
+  laporanDitangani  LaporanSampah[]   @relation("LaporanDitangani")
+  edukasi       Edukasi[]
+  notifikasi    Notifikasi[]
+  logAktivitas  LogAktivitas[]
+  resetPassword PasswordResetToken[]
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+model Mahasiswa {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique @map("user_id")
+  nim       String   @unique
+  prodi     String
+  fakultas  String
+  angkatan  Int
+  totalPoin Int      @default(0) @map("total_poin")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([prodi])
+  @@index([angkatan])
+  @@map("mahasiswa")
+}
+model Petugas {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique @map("user_id")
+  nip       String   @unique
+  jabatan   String?
+  tpsId     Int?     @map("tps_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tps    TitikPengumpulan? @relation(fields: [tpsId], references: [id], onDelete: SetNull)
+  jadwal JadwalPengangkutan[]
+  @@index([tpsId])
+  @@map("petugas")
+}
+model PengaturanPoin {
+  id         Int      @id @default(autoincrement())
+  kategori   Kategori @unique
+  poinPerKg  Int      @default(0) @map("poin_per_kg")
+  hargaPerKg Decimal  @default(0) @map("harga_per_kg") @db.Decimal(12, 2)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  @@map("pengaturan_poin")
+}
+model JenisSampah {
+  id        Int      @id @default(autoincrement())
+  kode      String   @unique
+  nama      String
+  kategori  Kategori
+  deskripsi String?
+  gambarUrl String?  @map("gambar_url")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  sampah SampahRow[]
+  @@index([kategori])
+  @@index([isActive])
+  @@map("jenis_sampah")
+}
+model TitikPengumpulan {
+  id          Int      @id @default(autoincrement())
+  kode        String   @unique
+  nama        String
+  lokasi      String
+  deskripsi   String?
+  latitude    Decimal? @db.Decimal(10, 7)
+  longitude   Decimal? @db.Decimal(10, 7)
+  kapasitasKg Decimal? @map("kapasitas_kg") @db.Decimal(10, 2)
+  jamBuka     String?  @map("jam_buka")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  petugas Petugas[]
+  sampah  SampahRow[]
+  jadwal  JadwalPengangkutan[]
+  @@index([isActive])
+  @@map("titik_pengumpulan")
+}
+model SampahRow {
+  id          String    @id
+  tanggal     DateTime  @db.Date
+  lokasi      String
+  petugas     String?
+  kategori    Kategori
+  beratKg     Float     @map("berat_kg")
+  status      Status    @default(Menunggu)
+  poin        Int       @default(0)
+  catatan     String?
+  alasanTolak String?   @map("alasan_tolak")
+  fotoUrl     String?   @map("foto_url")
+  jenisId     Int?      @map("jenis_id")
+  tpsId       Int?      @map("tps_id")
+  userId      Int?      @map("user_id")
+  createdBy   Int?      @map("created_by")
+  verifiedBy  Int?      @map("verified_by")
+  verifiedAt  DateTime? @map("verified_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  user        User?             @relation("SampahPemilik", fields: [userId], references: [id])
+  pembuat     User?             @relation("SampahPembuat", fields: [createdBy], references: [id])
+  verifikator User?             @relation("SampahVerifikator", fields: [verifiedBy], references: [id])
+  jenis       JenisSampah?      @relation(fields: [jenisId], references: [id], onDelete: SetNull)
+  tps         TitikPengumpulan? @relation(fields: [tpsId], references: [id], onDelete: SetNull)
+  transaksiPoin TransaksiPoin[]
+  @@index([status], map: "idx_sampah_status")
+  @@index([userId], map: "idx_sampah_user")
+  @@index([kategori])
+  @@index([tanggal])
+  @@index([tpsId])
+  @@map("sampah")
+}
+model TransaksiPoin {
+  id           Int               @id @default(autoincrement())
+  userId       Int               @map("user_id")
+  tipe         TipeTransaksiPoin
+  jumlah       Int
+  saldoSetelah Int               @map("saldo_setelah")
+  keterangan   String?
+  sampahId     String?           @map("sampah_id")
+  penukaranId  Int?              @map("penukaran_id")
+  dibuatOleh   Int?              @map("dibuat_oleh")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  user      User             @relation("PoinPemilik", fields: [userId], references: [id], onDelete: Cascade)
+  pembuat   User?            @relation("PoinPenyesuaianOleh", fields: [dibuatOleh], references: [id], onDelete: SetNull)
+  sampah    SampahRow?       @relation(fields: [sampahId], references: [id], onDelete: SetNull)
+  penukaran PenukaranReward? @relation(fields: [penukaranId], references: [id], onDelete: SetNull)
+  @@index([userId])
+  @@index([tipe])
+  @@index([sampahId])
+  @@index([penukaranId])
+  @@index([createdAt])
+  @@map("transaksi_poin")
+}
+model Reward {
+  id             Int      @id @default(autoincrement())
+  nama           String
+  deskripsi      String?
+  poinDibutuhkan Int      @map("poin_dibutuhkan")
+  stok           Int      @default(0)
+  gambarUrl      String?  @map("gambar_url")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  penukaran PenukaranReward[]
+  @@index([isActive])
+  @@map("reward")
+}
+model PenukaranReward {
+  id           Int             @id @default(autoincrement())
+  kode         String          @unique
+  userId       Int             @map("user_id")
+  rewardId     Int             @map("reward_id")
+  jumlah       Int             @default(1)
+  totalPoin    Int             @map("total_poin")
+  status       StatusPenukaran @default(Diproses)
+  catatan      String?
+  diprosesOleh Int?            @map("diproses_oleh")
+  processedAt  DateTime?       @map("processed_at")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+  user          User            @relation("PenukaranPemilik", fields: [userId], references: [id], onDelete: Restrict)
+  pemroses      User?           @relation("PenukaranDiproses", fields: [diprosesOleh], references: [id], onDelete: SetNull)
+  reward        Reward          @relation(fields: [rewardId], references: [id], onDelete: Restrict)
+  transaksiPoin TransaksiPoin[]
+  @@index([userId])
+  @@index([rewardId])
+  @@index([status])
+  @@map("penukaran_reward")
+}
+model JadwalPengangkutan {
+  id         Int          @id @default(autoincrement())
+  tpsId      Int          @map("tps_id")
+  petugasId  Int?         @map("petugas_id")
+  tanggal    DateTime     @db.Date
+  jamMulai   String       @map("jam_mulai")
+  jamSelesai String?      @map("jam_selesai")
+  status     StatusJadwal @default(Terjadwal)
+  catatan    String?
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+  tps     TitikPengumpulan @relation(fields: [tpsId], references: [id], onDelete: Cascade)
+  petugas Petugas?         @relation(fields: [petugasId], references: [id], onDelete: SetNull)
+  @@index([tpsId])
+  @@index([petugasId])
+  @@index([tanggal])
+  @@index([status])
+  @@map("jadwal_pengangkutan")
+}
+model LaporanSampah {
+  id            Int           @id @default(autoincrement())
+  userId        Int           @map("user_id")
+  judul         String
+  deskripsi     String
+  lokasi        String
+  fotoUrl       String?       @map("foto_url")
+  status        StatusLaporan @default(Baru)
+  tanggapan     String?
+  ditanganiOleh Int?          @map("ditangani_oleh")
+  ditanganiAt   DateTime?     @map("ditangani_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  pelapor  User  @relation("LaporanPelapor", fields: [userId], references: [id], onDelete: Cascade)
+  penangan User? @relation("LaporanDitangani", fields: [ditanganiOleh], references: [id], onDelete: SetNull)
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("laporan_sampah")
+}
+model Edukasi {
+  id          Int       @id @default(autoincrement())
+  authorId    Int       @map("author_id")
+  judul       String
+  slug        String    @unique
+  ringkasan   String?
+  konten      String    @db.Text
+  gambarUrl   String?   @map("gambar_url")
+  isPublished Boolean   @default(false) @map("is_published")
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  author User @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  @@index([authorId])
+  @@index([isPublished])
+  @@map("edukasi")
+}
+model Notifikasi {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  judul     String
+  pesan     String
+  link      String?
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, isRead])
+  @@map("notifikasi")
+}
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+model LogAktivitas {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @map("user_id")
+  aksi      String
+  entitas   String
+  entitasId String?  @map("entitas_id")
+  detail    Json?
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([userId])
+  @@index([entitas, entitasId])
+  @@index([createdAt])
+  @@map("log_aktivitas")
+}

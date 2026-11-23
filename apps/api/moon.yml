@@ -1,0 +1,23 @@
+language: typescript
+type: application
+
+tasks:
+  dev:
+    command: pnpm dev
+    options:
+      persistent: true
+      runInCI: false
+  build:
+    command: pnpm build
+    outputs:
+      - dist
+  typecheck:
+    command: pnpm typecheck
+  test:
+    command: pnpm test
+  prisma-generate:
+    command: pnpm prisma:generate
+  prisma-migrate:
+    command: pnpm prisma:migrate
+    options:
+      runInCI: false
