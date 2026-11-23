@@ -1,9 +1,9 @@
-import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { PackagePlus } from "lucide-react";
 import type { Kategori, StatusData } from "../../lib/sampahData";
 import { getSetoran, totalPoin } from "../../lib/setoranData";
 import { getUser } from "../../lib/session";
+import { useFetch } from "../../lib/useFetch";
 
 const KATEGORI: Kategori[] = ["Organik", "Anorganik", "B3"];
 
@@ -35,9 +35,24 @@ const tgl = (iso: string) =>
   });
 
 export default function DashboardMahasiswa() {
-  const list = useMemo(() => getSetoran(), []);
+  const { data, loading, error, reload } = useFetch(getSetoran);
   const nama = getUser()?.name ?? "Mahasiswa";
 
+  if (loading && !data) {
+    return <p className="text-sm text-stone-600">Memuat data...</p>;
+  }
+  if (error && !data) {
+    return (
+      <div role="alert" className="rounded-lg bg-red-50 px-3 py-3 text-sm text-red-700">
+        <p>{error}</p>
+        <button type="button" onClick={() => void reload()} className="mt-2 font-medium underline">
+          Coba lagi
+        </button>
+      </div>
+    );
+  }
+
+  const list = data ?? [];
   const verified = list.filter((s) => s.status === "Terverifikasi");
   const totalBerat = verified.reduce((sum, s) => sum + s.beratKg, 0);
   const menunggu = list.filter((s) => s.status === "Menunggu").length;
@@ -116,26 +131,34 @@ export default function DashboardMahasiswa() {
               Lihat semua
             </Link>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-left text-sm">
-              <tbody>
-                {list.slice(0, 5).map((s) => (
-                  <tr key={s.id} className="border-b border-stone-100 last:border-0">
-                    <td className="px-4 py-3 font-semibold text-stone-900">{s.id}</td>
-                    <td className="px-4 py-3">{tgl(s.tanggal)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`${badge} ${KATEGORI_STYLE[s.kategori]}`}>{s.kategori}</span>
-                    </td>
-                    <td className="px-4 py-3">{s.beratKg} kg</td>
-                    <td className="px-4 py-3">
-                      <span className={`${badge} ${STATUS_STYLE[s.status]}`}>{s.status}</span>
-                    </td>
-                    <td className="px-4 py-3 text-right text-stone-700">+{s.poin} poin</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {list.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-stone-500">
+              Belum ada setoran. Mulai dengan menekan tombol Setor sampah.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] text-left text-sm">
+                <tbody>
+                  {list.slice(0, 5).map((s) => (
+                    <tr key={s.id} className="border-b border-stone-100 last:border-0">
+                      <td className="px-4 py-3 font-semibold text-stone-900">{s.id}</td>
+                      <td className="px-4 py-3">{tgl(s.tanggal)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`${badge} ${KATEGORI_STYLE[s.kategori]}`}>
+                          {s.kategori}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">{s.beratKg} kg</td>
+                      <td className="px-4 py-3">
+                        <span className={`${badge} ${STATUS_STYLE[s.status]}`}>{s.status}</span>
+                      </td>
+                      <td className="px-4 py-3 text-right text-stone-700">+{s.poin} poin</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       </div>
     </div>
